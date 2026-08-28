@@ -5,10 +5,9 @@
 
 void *
 sc_allocarray(size_t nmemb, size_t size) {
-    size_t bytes;
-    if (__builtin_mul_overflow(nmemb, size, &bytes)) {
-      errno = ENOMEM;
-      return NULL;
+    if (size && nmemb > SIZE_MAX / size) {
+        errno = ENOMEM;
+        return NULL;
     }
-    return malloc(bytes);
+    return malloc(nmemb * size);
 }

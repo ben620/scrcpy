@@ -100,11 +100,10 @@ long jrand48(unsigned short xsubi[3]) {
 
 #ifndef HAVE_REALLOCARRAY
 void *reallocarray(void *ptr, size_t nmemb, size_t size) {
-    size_t bytes;
-    if (__builtin_mul_overflow(nmemb, size, &bytes)) {
-      errno = ENOMEM;
-      return NULL;
+    if (size && nmemb > SIZE_MAX / size) {
+        errno = ENOMEM;
+        return NULL;
     }
-    return realloc(ptr, bytes);
+    return realloc(ptr, nmemb * size);
 }
 #endif

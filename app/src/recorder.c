@@ -285,6 +285,22 @@ end:
 }
 
 static bool
+sc_recorder_write_pts(struct sc_recorder *recorder, int64_t pts_us) {
+    if (!recorder->pts_file) {
+        return true;
+    }
+
+    int r = fprintf(recorder->pts_file, "%" PRIu64 ",%" PRId64 "\n",
+                    recorder->pts_frame_index++, pts_us);
+    if (r < 0) {
+        LOGE("Could not write record PTS file: %s", recorder->pts_filename);
+        return false;
+    }
+
+    return true;
+}
+
+static bool
 sc_recorder_process_packets(struct sc_recorder *recorder) {
     int64_t pts_origin = AV_NOPTS_VALUE;
 
@@ -399,10 +415,15 @@ sc_recorder_process_packets(struct sc_recorder *recorder) {
                 video_pkt_previous->duration = video_pkt->pts
                                              - video_pkt_previous->pts;
 
+                int64_t raw_pts = video_pkt_previous->pts + pts_origin;
                 bool ok = sc_recorder_write_video(recorder, video_pkt_previous);
                 av_packet_free(&video_pkt_previous);
                 if (!ok) {
                     LOGE("Could not record video packet");
+                    error = true;
+                    goto end;
+                }
+                if (!sc_recorder_write_pts(recorder, raw_pts)) {
                     error = true;
                     goto end;
                 }
@@ -430,15 +451,19 @@ sc_recorder_process_packets(struct sc_recorder *recorder) {
 
     // Write the last video packet
     AVPacket *last = video_pkt_previous;
+    video_pkt_previous = NULL;
     if (last) {
         // assign an arbitrary duration to the last packet
         last->duration = 100000;
+        int64_t raw_pts = last->pts + pts_origin;
         bool ok = sc_recorder_write_video(recorder, last);
         if (!ok) {
             // failing to write the last frame is not very serious, no
             // future frame may depend on it, so the resulting file
             // will still be valid
             LOGW("Could not record last packet");
+        } else if (!sc_recorder_write_pts(recorder, raw_pts)) {
+            error = true;
         }
         av_packet_free(&last);
     }
@@ -455,6 +480,9 @@ end:
     }
     if (audio_pkt) {
         av_packet_free(&audio_pkt);
+    }
+    if (video_pkt_previous) {
+        av_packet_free(&video_pkt_previous);
     }
 
     return !error;
@@ -481,6 +509,17 @@ run_recorder(void *data) {
     (void) ok; // We don't care if it worked
 
     bool success = sc_recorder_record(recorder);
+
+    if (recorder->pts_file) {
+        bool pts_success = fflush(recorder->pts_file) == 0;
+        pts_success = fclose(recorder->pts_file) == 0 && pts_success;
+        recorder->pts_file = NULL;
+        if (!pts_success) {
+            LOGE("Could not finalize record PTS file: %s",
+                 recorder->pts_filename);
+            success = false;
+        }
+    }
 
     sc_mutex_lock(&recorder->mutex);
     // Prevent the producer to push any new packet
@@ -632,6 +671,7 @@ sc_recorder_video_packet_sink_push(struct sc_packet_sink *sink,
     bool ok = sc_vecdeque_push(&recorder->video_queue, rec);
     if (!ok) {
         LOG_OOM();
+        av_packet_free(&rec);
         sc_mutex_unlock(&recorder->mutex);
         return false;
     }
@@ -756,8 +796,8 @@ sc_recorder_stream_init(struct sc_recorder_stream *stream) {
 
 bool
 sc_recorder_init(struct sc_recorder *recorder, const char *filename,
-                 enum sc_record_format format, bool video, bool audio,
-                 enum sc_orientation orientation,
+                 const char *pts_filename, enum sc_record_format format,
+                 bool video, bool audio, enum sc_orientation orientation,
                  const struct sc_recorder_callbacks *cbs, void *cbs_userdata) {
     assert(!sc_orientation_is_mirror(orientation));
 
@@ -766,6 +806,15 @@ sc_recorder_init(struct sc_recorder *recorder, const char *filename,
         LOG_OOM();
         return false;
     }
+
+    recorder->pts_filename = pts_filename ? strdup(pts_filename) : NULL;
+    if (pts_filename && !recorder->pts_filename) {
+        LOG_OOM();
+        free(recorder->filename);
+        return false;
+    }
+    recorder->pts_file = NULL;
+    recorder->pts_frame_index = 0;
 
     bool ok = sc_mutex_init(&recorder->mutex);
     if (!ok) {
@@ -798,6 +847,21 @@ sc_recorder_init(struct sc_recorder *recorder, const char *filename,
 
     recorder->format = format;
 
+    if (recorder->pts_filename) {
+        recorder->pts_file = fopen(recorder->pts_filename, "w");
+        if (!recorder->pts_file) {
+            LOGE("Could not open record PTS file: %s", recorder->pts_filename);
+            goto error_cond_destroy;
+        }
+        if (fprintf(recorder->pts_file, "frame,pts_us\n") < 0) {
+            LOGE("Could not write record PTS header: %s",
+                 recorder->pts_filename);
+            fclose(recorder->pts_file);
+            recorder->pts_file = NULL;
+            goto error_cond_destroy;
+        }
+    }
+
     assert(cbs && cbs->on_ended);
     recorder->cbs = cbs;
     recorder->cbs_userdata = cbs_userdata;
@@ -825,9 +889,12 @@ sc_recorder_init(struct sc_recorder *recorder, const char *filename,
 
     return true;
 
+error_cond_destroy:
+    sc_cond_destroy(&recorder->cond);
 error_mutex_destroy:
     sc_mutex_destroy(&recorder->mutex);
 error_free_filename:
+    free(recorder->pts_filename);
     free(recorder->filename);
 
     return false;
@@ -860,7 +927,11 @@ sc_recorder_join(struct sc_recorder *recorder) {
 
 void
 sc_recorder_destroy(struct sc_recorder *recorder) {
+    if (recorder->pts_file) {
+        fclose(recorder->pts_file);
+    }
     sc_cond_destroy(&recorder->cond);
     sc_mutex_destroy(&recorder->mutex);
+    free(recorder->pts_filename);
     free(recorder->filename);
 }

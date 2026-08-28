@@ -4,6 +4,11 @@
 #include "config.h"
 #include "compat.h"
 
+#ifdef _MSC_VER
+# include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
 #define MAX(X,Y) ((X) > (Y) ? (X) : (Y))

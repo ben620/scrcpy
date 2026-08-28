@@ -38,6 +38,6 @@ sc_file_is_regular(const char *path) {
         perror("stat");
         return false;
     }
-    return S_ISREG(path_stat.st_mode);
+    return (path_stat.st_mode & _S_IFMT) == _S_IFREG;
 }
 

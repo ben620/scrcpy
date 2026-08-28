@@ -6,7 +6,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#ifdef _WIN32
+# include <io.h>
+# define isatty _isatty
+# define STDERR_FILENO 2
+#else
+# include <unistd.h>
+#endif
 
 #include "options.h"
 #include "util/log.h"
@@ -25,6 +31,7 @@ enum {
     OPT_ALWAYS_ON_TOP,
     OPT_CROP,
     OPT_RECORD_FORMAT,
+    OPT_RECORD_PTS,
     OPT_PREFER_TEXT,
     OPT_WINDOW_X,
     OPT_WINDOW_Y,
@@ -798,6 +805,14 @@ static const struct sc_option options[] = {
         .argdesc = "format",
         .text = "Force recording format (mp4, mkv, m4a, mka, opus, aac, flac "
                 "or wav).",
+    },
+    {
+        .longopt_id = OPT_RECORD_PTS,
+        .longopt = "record-pts",
+        .argdesc = "file",
+        .text = "Write one CSV row for every video packet written to the "
+                "recording. The timestamp is the raw device presentation "
+                "timestamp in microseconds.",
     },
     {
         .longopt_id = OPT_RECORD_ORIENTATION,
@@ -2529,6 +2544,9 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                     return false;
                 }
                 break;
+            case OPT_RECORD_PTS:
+                opts->record_pts_filename = optarg;
+                break;
             case 'h':
                 args->help = true;
                 break;
@@ -3326,6 +3344,22 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
 
     if (opts->record_format && !opts->record_filename) {
         LOGE("Record format specified without recording");
+        return false;
+    }
+
+    if (opts->record_pts_filename && !opts->record_filename) {
+        LOGE("Record PTS file specified without recording");
+        return false;
+    }
+
+    if (opts->record_pts_filename && !opts->video) {
+        LOGE("Record PTS file specified without video");
+        return false;
+    }
+
+    if (opts->record_pts_filename
+            && !strcmp(opts->record_pts_filename, opts->record_filename)) {
+        LOGE("Record PTS file must differ from the recording file");
         return false;
     }
 

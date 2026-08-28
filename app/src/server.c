@@ -603,7 +603,8 @@ device_read_info(struct sc_intr *intr, sc_socket device_socket,
     }
     // in case the client sends garbage
     buf[SC_DEVICE_NAME_FIELD_LENGTH - 1] = '\0';
-    static_assert(sizeof(info->device_name) == SC_DEVICE_NAME_FIELD_LENGTH);
+    static_assert(sizeof(info->device_name) == SC_DEVICE_NAME_FIELD_LENGTH,
+                  "device name field size mismatch");
     memcpy(info->device_name, buf, SC_DEVICE_NAME_FIELD_LENGTH);
 
     return true;
